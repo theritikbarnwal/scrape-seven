@@ -1,0 +1,43 @@
+name: Python ServiceNow Job Scraper
+
+on:
+  schedule:
+    - cron: '30 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  scrape-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r pyscript/requirements.txt
+          playwright install
+
+      - name: Run Python scraper
+        run: python pyscript/scrape.py
+
+      - name: Commit results if file exists
+        run: |
+          FILE_NAME=$(ls -t PY_jobs-*.json | head -n 1)
+          if [ -f "$FILE_NAME" ]; then
+            git config --global user.name 'theritikbarnwal'
+            git config --global user.email 'theritikbarnwal@gmail.com'
+            git add "$FILE_NAME"
+            git commit -m "Update job data: $FILE_NAME"
+            git push
+          else
+            echo "No jobs file found, skipping commit"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
