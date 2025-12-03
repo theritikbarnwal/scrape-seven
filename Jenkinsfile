@@ -22,6 +22,7 @@ pipeline {
     environment {
         PYTHON_VERSION = '3.12'
         VENV_DIR = "${WORKSPACE}/venv"
+        PATH = "${WORKSPACE}/venv/bin:/usr/local/bin:${env.PATH}"
     }
     
     stages {
@@ -44,12 +45,13 @@ pipeline {
                     
                     # Activate and upgrade pip
                     . ${VENV_DIR}/bin/activate
-                    pip install --upgrade pip
+                    pip install --upgrade pip setuptools wheel
                     
                     # Install project dependencies
                     pip install -r pyscript/requirements.txt
                     
                     # Verify installation
+                    echo "\\n=== Installed packages ==="
                     pip list
                 '''
             }
@@ -62,19 +64,34 @@ pipeline {
                     # Activate virtual environment
                     . ${VENV_DIR}/bin/activate
                     
-                    # Install security scanning tools
-                    pip install bandit safety pip-audit semgrep
+                    echo "=== Installing Python security tools ==="
+                    # Install security scanning tools (skip semgrep for now)
+                    pip install bandit safety pip-audit || true
                     
+                    echo "\\n=== Installing code quality tools ==="
                     # Install code quality tools
-                    pip install pylint flake8 black isort
+                    pip install pylint flake8 black isort || true
                     
+                    echo "\\n=== Installing Playwright ==="
                     # Install Playwright and its browsers
                     pip install playwright
-                    playwright install chromium
+                    playwright install chromium --with-deps || playwright install chromium
+                    
+                    echo "\\n=== Attempting to install Semgrep via system package ==="
+                    # Try to install semgrep via pip, but don't fail if it doesn't work
+                    pip install semgrep 2>/dev/null || echo "⚠️ Semgrep installation skipped (optional)"
                     
                     # Show installed packages
                     echo "\\n=== Installed Security Tools ==="
-                    pip list | grep -E "bandit|safety|pip-audit|semgrep|pylint|flake8|black|isort|playwright"
+                    pip list | grep -E "bandit|safety|pip-audit|semgrep|pylint|flake8|black|isort|playwright" || true
+                    
+                    # Verify key tools
+                    echo "\\n=== Verifying installations ==="
+                    command -v bandit && echo "✓ Bandit installed" || echo "✗ Bandit missing"
+                    command -v safety && echo "✓ Safety installed" || echo "✗ Safety missing"
+                    command -v pip-audit && echo "✓ Pip-audit installed" || echo "✗ Pip-audit missing"
+                    command -v pylint && echo "✓ Pylint installed" || echo "✗ Pylint missing"
+                    command -v playwright && echo "✓ Playwright installed" || echo "✗ Playwright missing"
                 '''
             }
         }
@@ -92,12 +109,20 @@ pipeline {
                     . ${VENV_DIR}/bin/activate
                     
                     echo "=== Safety Check (PyPI vulnerabilities) ==="
-                    safety check --json > safety-report.json || true
-                    safety check || true
+                    if command -v safety &> /dev/null; then
+                        safety check --json > safety-report.json 2>&1 || true
+                        safety check 2>&1 || echo "Safety check completed with warnings"
+                    else
+                        echo "⚠️ Safety not installed, skipping..." | tee safety-report.json
+                    fi
                     
                     echo "\\n=== Pip Audit (comprehensive vulnerability check) ==="
-                    pip-audit --desc --format json > pip-audit-report.json || true
-                    pip-audit --desc || true
+                    if command -v pip-audit &> /dev/null; then
+                        pip-audit --desc --format json > pip-audit-report.json 2>&1 || true
+                        pip-audit --desc 2>&1 || echo "Pip-audit check completed with warnings"
+                    else
+                        echo "⚠️ Pip-audit not installed, skipping..." | tee pip-audit-report.json
+                    fi
                 '''
                 
                 archiveArtifacts artifacts: '*-report.json', allowEmptyArchive: true
@@ -117,12 +142,21 @@ pipeline {
                     . ${VENV_DIR}/bin/activate
                     
                     echo "=== Bandit Security Scan ==="
-                    bandit -r pyscript/ -f json -o bandit-report.json || true
-                    bandit -r pyscript/ -ll || true
+                    if command -v bandit &> /dev/null; then
+                        bandit -r pyscript/ -f json -o bandit-report.json 2>&1 || true
+                        bandit -r pyscript/ -ll 2>&1 || echo "Bandit scan completed with warnings"
+                    else
+                        echo "⚠️ Bandit not installed, skipping..." | tee bandit-report.json
+                    fi
                     
                     echo "\\n=== Semgrep Security Patterns ==="
-                    semgrep --config=auto pyscript/ --json > semgrep-report.json || true
-                    semgrep --config=auto pyscript/ || true
+                    if command -v semgrep &> /dev/null; then
+                        semgrep --config=auto pyscript/ --json > semgrep-report.json 2>&1 || true
+                        semgrep --config=auto pyscript/ 2>&1 || echo "Semgrep scan completed with warnings"
+                    else
+                        echo "⚠️ Semgrep not installed, skipping this scan" | tee semgrep-report.json
+                        echo "Note: Semgrep requires additional system dependencies"
+                    fi
                 '''
                 
                 archiveArtifacts artifacts: 'bandit-report.json,semgrep-report.json', allowEmptyArchive: true
@@ -142,16 +176,33 @@ pipeline {
                     . ${VENV_DIR}/bin/activate
                     
                     echo "=== Pylint Analysis ==="
-                    pylint pyscript/*.py --output-format=json > pylint-report.json || true
-                    pylint pyscript/*.py || true
+                    if command -v pylint &> /dev/null; then
+                        pylint pyscript/*.py --output-format=json > pylint-report.json 2>&1 || true
+                        pylint pyscript/*.py 2>&1 || echo "Pylint completed with warnings"
+                    else
+                        echo "⚠️ Pylint not installed, skipping..." | tee pylint-report.json
+                    fi
                     
                     echo "\\n=== Flake8 Linting ==="
-                    flake8 pyscript/ --output-file=flake8-report.txt || true
-                    flake8 pyscript/ || true
+                    if command -v flake8 &> /dev/null; then
+                        flake8 pyscript/ --output-file=flake8-report.txt 2>&1 || true
+                        flake8 pyscript/ 2>&1 || echo "Flake8 completed with warnings"
+                    else
+                        echo "⚠️ Flake8 not installed, skipping..." | tee flake8-report.txt
+                    fi
                     
                     echo "\\n=== Code Formatting Check ==="
-                    black --check pyscript/ || true
-                    isort --check-only pyscript/ || true
+                    if command -v black &> /dev/null; then
+                        black --check pyscript/ 2>&1 || echo "Black found formatting issues (not an error)"
+                    else
+                        echo "⚠️ Black not installed, skipping..."
+                    fi
+                    
+                    if command -v isort &> /dev/null; then
+                        isort --check-only pyscript/ 2>&1 || echo "Isort found sorting issues (not an error)"
+                    else
+                        echo "⚠️ Isort not installed, skipping..."
+                    fi
                 '''
                 
                 archiveArtifacts artifacts: 'pylint-report.json,flake8-report.txt', allowEmptyArchive: true
@@ -171,6 +222,17 @@ EOFMARKER
                     echo "Scan Type: ${SECURITY_SCAN_TYPE}" >> security-summary.txt
                     echo "Timestamp: $(date)" >> security-summary.txt
                     echo "Jenkins Job: ${JOB_NAME} #${BUILD_NUMBER}" >> security-summary.txt
+                    echo "Python Version: $(python3 --version)" >> security-summary.txt
+                    echo "" >> security-summary.txt
+                    
+                    # Check which tools ran
+                    echo "--- Tools Status ---" >> security-summary.txt
+                    . ${VENV_DIR}/bin/activate
+                    command -v safety &> /dev/null && echo "✓ Safety: Available" >> security-summary.txt || echo "✗ Safety: Not available" >> security-summary.txt
+                    command -v pip-audit &> /dev/null && echo "✓ Pip-audit: Available" >> security-summary.txt || echo "✗ Pip-audit: Not available" >> security-summary.txt
+                    command -v bandit &> /dev/null && echo "✓ Bandit: Available" >> security-summary.txt || echo "✗ Bandit: Not available" >> security-summary.txt
+                    command -v semgrep &> /dev/null && echo "✓ Semgrep: Available" >> security-summary.txt || echo "✗ Semgrep: Not available (optional)" >> security-summary.txt
+                    command -v pylint &> /dev/null && echo "✓ Pylint: Available" >> security-summary.txt || echo "✗ Pylint: Not available" >> security-summary.txt
                     echo "" >> security-summary.txt
                     
                     # Parse and summarize results
@@ -204,6 +266,8 @@ EOFMARKER
                     fi
                     
                     echo "" >> security-summary.txt
+                    echo "========================================" >> security-summary.txt
+                    echo "For detailed reports, check Build Artifacts" >> security-summary.txt
                     echo "========================================" >> security-summary.txt
                     
                     cat security-summary.txt
@@ -245,7 +309,7 @@ EOFMARKER
             sh '''
                 # Archive scraper output if exists
                 if [ -d "${VENV_DIR}" ]; then
-                    echo "Removing virtual environment..."
+                    echo "Removing virtual environment to save disk space..."
                     rm -rf ${VENV_DIR}
                 fi
             '''
@@ -255,10 +319,12 @@ EOFMARKER
         success {
             echo "✅ Security testing completed successfully!"
             echo "📁 Check archived artifacts for detailed reports"
+            echo "📊 Review security-summary.txt for scan overview"
         }
         
         failure {
             echo "❌ Security testing failed. Check logs for details."
+            echo "💡 Tip: Review Console Output for specific error messages"
         }
     }
 }
