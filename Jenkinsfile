@@ -4,7 +4,7 @@ pipeline {
     parameters {
         choice(
             name: 'SECURITY_SCAN_TYPE',
-            choices: ['Full Security Audit', 'Dependency Scan Only', 'Code Quality Check', 'All Checks'],
+            choices: ['Quick Scan (Fast)', 'Full Security Audit', 'Dependency Scan Only', 'Code Quality Check', 'All Checks'],
             description: 'Select the type of security testing to perform'
         )
         booleanParam(
@@ -99,7 +99,7 @@ pipeline {
         stage('Dependency Vulnerability Scan') {
             when {
                 expression { 
-                    params.SECURITY_SCAN_TYPE in ['Dependency Scan Only', 'All Checks', 'Full Security Audit'] 
+                    params.SECURITY_SCAN_TYPE in ['Quick Scan (Fast)', 'Dependency Scan Only', 'All Checks', 'Full Security Audit'] 
                 }
             }
             steps {
@@ -132,7 +132,7 @@ pipeline {
         stage('Static Code Security Analysis') {
             when {
                 expression { 
-                    params.SECURITY_SCAN_TYPE in ['Full Security Audit', 'All Checks'] 
+                    params.SECURITY_SCAN_TYPE in ['Quick Scan (Fast)', 'Full Security Audit', 'All Checks'] 
                 }
             }
             steps {
@@ -143,19 +143,35 @@ pipeline {
                     
                     echo "=== Bandit Security Scan ==="
                     if command -v bandit &> /dev/null; then
-                        bandit -r pyscript/ -f json -o bandit-report.json 2>&1 || true
-                        bandit -r pyscript/ -ll 2>&1 || echo "Bandit scan completed with warnings"
+                        # Use -l flag for Quick Scan to only show high severity issues
+                        BANDIT_LEVEL=""
+                        if [ "${SECURITY_SCAN_TYPE}" = "Quick Scan (Fast)" ]; then
+                            echo "Running QUICK scan (high severity only)..."
+                            BANDIT_LEVEL="-lll"
+                        else
+                            echo "Running FULL scan (all severities)..."
+                            BANDIT_LEVEL="-ll"
+                        fi
+                        
+                        bandit -r pyscript/ $BANDIT_LEVEL -f json -o bandit-report.json 2>&1 || true
+                        bandit -r pyscript/ $BANDIT_LEVEL 2>&1 || echo "Bandit scan completed with warnings"
                     else
                         echo "⚠️ Bandit not installed, skipping..." | tee bandit-report.json
                     fi
                     
-                    echo "\\n=== Semgrep Security Patterns ==="
-                    if command -v semgrep &> /dev/null; then
-                        semgrep --config=auto pyscript/ --json > semgrep-report.json 2>&1 || true
-                        semgrep --config=auto pyscript/ 2>&1 || echo "Semgrep scan completed with warnings"
+                    # Skip Semgrep for Quick Scan
+                    if [ "${SECURITY_SCAN_TYPE}" != "Quick Scan (Fast)" ]; then
+                        echo "\\n=== Semgrep Security Patterns ==="
+                        if command -v semgrep &> /dev/null; then
+                            semgrep --config=auto pyscript/ --json > semgrep-report.json 2>&1 || true
+                            semgrep --config=auto pyscript/ 2>&1 || echo "Semgrep scan completed with warnings"
+                        else
+                            echo "⚠️ Semgrep not installed, skipping this scan" | tee semgrep-report.json
+                            echo "Note: Semgrep requires additional system dependencies"
+                        fi
                     else
-                        echo "⚠️ Semgrep not installed, skipping this scan" | tee semgrep-report.json
-                        echo "Note: Semgrep requires additional system dependencies"
+                        echo "\\n⚡ Skipping Semgrep for Quick Scan"
+                        echo "Semgrep skipped for quick scan" > semgrep-report.json
                     fi
                 '''
                 
