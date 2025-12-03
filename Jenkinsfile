@@ -20,8 +20,8 @@ pipeline {
     }
     
     environment {
-        PYTHON_VERSION = '3.11'
-        WORKSPACE_CLEAN = 'true'
+        PYTHON_VERSION = '3.12'
+        VENV_DIR = "${WORKSPACE}/venv"
     }
     
     stages {
@@ -32,13 +32,25 @@ pipeline {
             }
         }
         
-        stage('Setup Python Environment') {
+        stage('Setup Python Virtual Environment') {
             steps {
-                echo "🐍 Setting up Python ${PYTHON_VERSION}..."
+                echo "🐍 Setting up Python ${PYTHON_VERSION} with virtual environment..."
                 sh '''
+                    # Check Python version
                     python3 --version
-                    python3 -m pip install --upgrade pip
+                    
+                    # Create virtual environment
+                    python3 -m venv ${VENV_DIR}
+                    
+                    # Activate and upgrade pip
+                    . ${VENV_DIR}/bin/activate
+                    pip install --upgrade pip
+                    
+                    # Install project dependencies
                     pip install -r pyscript/requirements.txt
+                    
+                    # Verify installation
+                    pip list
                 '''
             }
         }
@@ -47,14 +59,22 @@ pipeline {
             steps {
                 echo "🔒 Installing security scanning tools..."
                 sh '''
+                    # Activate virtual environment
+                    . ${VENV_DIR}/bin/activate
+                    
                     # Install security scanning tools
                     pip install bandit safety pip-audit semgrep
                     
                     # Install code quality tools
                     pip install pylint flake8 black isort
                     
-                    # Install Playwright for testing
+                    # Install Playwright and its browsers
+                    pip install playwright
                     playwright install chromium
+                    
+                    # Show installed packages
+                    echo "\\n=== Installed Security Tools ==="
+                    pip list | grep -E "bandit|safety|pip-audit|semgrep|pylint|flake8|black|isort|playwright"
                 '''
             }
         }
@@ -68,6 +88,9 @@ pipeline {
             steps {
                 echo "🛡️ Scanning dependencies for known vulnerabilities..."
                 sh '''
+                    # Activate virtual environment
+                    . ${VENV_DIR}/bin/activate
+                    
                     echo "=== Safety Check (PyPI vulnerabilities) ==="
                     safety check --json > safety-report.json || true
                     safety check || true
@@ -90,6 +113,9 @@ pipeline {
             steps {
                 echo "🔎 Running static security analysis on code..."
                 sh '''
+                    # Activate virtual environment
+                    . ${VENV_DIR}/bin/activate
+                    
                     echo "=== Bandit Security Scan ==="
                     bandit -r pyscript/ -f json -o bandit-report.json || true
                     bandit -r pyscript/ -ll || true
@@ -112,6 +138,9 @@ pipeline {
             steps {
                 echo "✨ Checking code quality and standards..."
                 sh '''
+                    # Activate virtual environment
+                    . ${VENV_DIR}/bin/activate
+                    
                     echo "=== Pylint Analysis ==="
                     pylint pyscript/*.py --output-format=json > pylint-report.json || true
                     pylint pyscript/*.py || true
@@ -147,24 +176,35 @@ EOFMARKER
                     # Parse and summarize results
                     echo "--- Dependency Vulnerabilities ---" >> security-summary.txt
                     if [ -f "safety-report.json" ]; then
-                        echo "Safety scan completed. Check safety-report.json for details." >> security-summary.txt
+                        echo "✓ Safety scan completed. Check safety-report.json for details." >> security-summary.txt
                     fi
                     
                     if [ -f "pip-audit-report.json" ]; then
-                        echo "Pip-audit scan completed. Check pip-audit-report.json for details." >> security-summary.txt
+                        echo "✓ Pip-audit scan completed. Check pip-audit-report.json for details." >> security-summary.txt
                     fi
                     
                     echo "" >> security-summary.txt
                     echo "--- Code Security Issues ---" >> security-summary.txt
                     if [ -f "bandit-report.json" ]; then
-                        echo "Bandit scan completed. Check bandit-report.json for details." >> security-summary.txt
+                        echo "✓ Bandit scan completed. Check bandit-report.json for details." >> security-summary.txt
+                    fi
+                    
+                    if [ -f "semgrep-report.json" ]; then
+                        echo "✓ Semgrep scan completed. Check semgrep-report.json for details." >> security-summary.txt
                     fi
                     
                     echo "" >> security-summary.txt
                     echo "--- Code Quality ---" >> security-summary.txt
                     if [ -f "pylint-report.json" ]; then
-                        echo "Pylint analysis completed. Check pylint-report.json for details." >> security-summary.txt
+                        echo "✓ Pylint analysis completed. Check pylint-report.json for details." >> security-summary.txt
                     fi
+                    
+                    if [ -f "flake8-report.txt" ]; then
+                        echo "✓ Flake8 analysis completed. Check flake8-report.txt for details." >> security-summary.txt
+                    fi
+                    
+                    echo "" >> security-summary.txt
+                    echo "========================================" >> security-summary.txt
                     
                     cat security-summary.txt
                 '''
@@ -180,6 +220,9 @@ EOFMARKER
             steps {
                 echo "🚀 Running ServiceNow job scraper..."
                 sh '''
+                    # Activate virtual environment
+                    . ${VENV_DIR}/bin/activate
+                    
                     cd pyscript
                     python scrape.py
                     
@@ -187,6 +230,7 @@ EOFMARKER
                     if ls PY_jobs-*.json 1> /dev/null 2>&1; then
                         cp PY_jobs-*.json ../
                         echo "✅ Scraper completed successfully"
+                        ls -lh PY_jobs-*.json
                     else
                         echo "⚠️ No output file generated"
                     fi
@@ -198,6 +242,13 @@ EOFMARKER
     post {
         always {
             echo "🧹 Cleaning up..."
+            sh '''
+                # Archive scraper output if exists
+                if [ -d "${VENV_DIR}" ]; then
+                    echo "Removing virtual environment..."
+                    rm -rf ${VENV_DIR}
+                fi
+            '''
             archiveArtifacts artifacts: 'PY_jobs-*.json', allowEmptyArchive: true
         }
         
