@@ -130,20 +130,27 @@ pipeline {
         }
         
         stage('Static Code Security Analysis') {
-            when {
-                expression { 
-                    params.SECURITY_SCAN_TYPE in ['Quick Scan (Fast)', 'Full Security Audit', 'All Checks'] 
+                when {
+                    expression { 
+                        params.SECURITY_SCAN_TYPE in ['Quick Scan (Fast)', 'Full Security Audit', 'All Checks'] 
+                    }
                 }
-            }
-            steps {
-                echo "🔎 Running static security analysis on code..."
-                sh '''
-                    # Activate virtual environment
-                    . ${VENV_DIR}/bin/activate
-                    
-                    echo "=== Bandit Security Scan ==="
-                    if command -v bandit &> /dev/null; then
-                        # Use -l flag for Quick Scan to only show high severity issues
+                // Hard cap the whole stage so it can never hang forever
+                options {
+                    timeout(time: 10, unit: 'MINUTES')
+                }
+                steps {
+                    echo "🔎 Running static security analysis on code..."
+                    sh '''
+                        set -euxo pipefail
+
+                        . ${VENV_DIR}/bin/activate
+
+                        echo "Python used: $(which python3)"
+                        echo "Bandit used: $(command -v bandit || echo 'not found')"
+                        echo "Semgrep used: $(command -v semgrep || echo 'not found (optional)')"
+
+                        echo "=== Bandit Security Scan ==="
                         BANDIT_LEVEL=""
                         if [ "${SECURITY_SCAN_TYPE}" = "Quick Scan (Fast)" ]; then
                             echo "Running QUICK scan (high severity only)..."
@@ -152,32 +159,31 @@ pipeline {
                             echo "Running FULL scan (all severities)..."
                             BANDIT_LEVEL="-ll"
                         fi
-                        
-                        bandit -r pyscript/ $BANDIT_LEVEL -f json -o bandit-report.json 2>&1 || true
-                        bandit -r pyscript/ $BANDIT_LEVEL 2>&1 || echo "Bandit scan completed with warnings"
-                    else
-                        echo "⚠️ Bandit not installed, skipping..." | tee bandit-report.json
-                    fi
-                    
-                    # Skip Semgrep for Quick Scan
-                    if [ "${SECURITY_SCAN_TYPE}" != "Quick Scan (Fast)" ]; then
+
+                        # Run ONCE, JSON only, keep console small
+                        time bandit -r pyscript/ $BANDIT_LEVEL -f json -o bandit-report.json || echo "Bandit finished with findings or minor errors"
+
                         echo "\\n=== Semgrep Security Patterns ==="
-                        if command -v semgrep &> /dev/null; then
-                            semgrep --config=auto pyscript/ --json > semgrep-report.json 2>&1 || true
-                            semgrep --config=auto pyscript/ 2>&1 || echo "Semgrep scan completed with warnings"
+                        if [ "${SECURITY_SCAN_TYPE}" != "Quick Scan (Fast)" ]; then
+                            if command -v semgrep > /dev/null 2>&1; then
+                                # Use a smaller ruleset and a hard timeout
+                                # If this still sucks, swap --config=p/ci for a local rules file.
+                                time semgrep --config=p/ci --timeout=60 --json pyscript/ > semgrep-report.json \
+                                    || echo "Semgrep failed or timed out, see logs" > semgrep-report.json
+                            else
+                                echo "Semgrep not installed, writing placeholder report"
+                                echo "Semgrep not installed" > semgrep-report.json
+                            fi
                         else
-                            echo "⚠️ Semgrep not installed, skipping this scan" | tee semgrep-report.json
-                            echo "Note: Semgrep requires additional system dependencies"
+                            echo "Quick scan selected, skipping Semgrep"
+                            echo "Semgrep skipped for Quick Scan" > semgrep-report.json
                         fi
-                    else
-                        echo "\\n⚡ Skipping Semgrep for Quick Scan"
-                        echo "Semgrep skipped for quick scan" > semgrep-report.json
-                    fi
-                '''
-                
-                archiveArtifacts artifacts: 'bandit-report.json,semgrep-report.json', allowEmptyArchive: true
+                    '''
+
+                    archiveArtifacts artifacts: 'bandit-report.json,semgrep-report.json', allowEmptyArchive: true
+                }
             }
-        }
+
         
         stage('Code Quality Check') {
             when {
