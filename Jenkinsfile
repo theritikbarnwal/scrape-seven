@@ -8,7 +8,7 @@ pipeline {
             description: 'Select the type of security testing to perform'
         )
         booleanParam(
-            name: 'RUN_SCRAPER',
+            name: 'RUN_SCRAPER', 
             defaultValue: false,
             description: 'Run the actual scraper after security checks?'
         )
