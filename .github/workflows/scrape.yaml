@@ -1,8 +1,8 @@
 name: Python ServiceNow Job Scraper
 
 on:
-  schedule:
-    - cron: '30 4 * * 1'
+#  schedule:
+ #   - cron: '30 4 * * 1'
   workflow_dispatch:
 
 jobs:
